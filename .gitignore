@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$*.py
+*.egg-info/
+.eggs/
+build/
+dist/
+*.spec
+
+# Virtual Environment
+venv/
+.venv/
+env/
+ENV/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Output Word Documents (except templates if they are part of the repo)
+# If you want to exclude generated documents:
+*_Generated.docx
