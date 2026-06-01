@@ -1,166 +1,207 @@
 # ETABS Report Generator 📊🏗️
 
-An automated, GUI-based tool designed to streamline and accelerate structural engineering reporting. It connects directly to **CSI ETABS** via its COM API, extracts analytical frame forces and concrete design reinforcement results, and dynamically generates professional, formatted Microsoft Word reports using a Jinja2-based templating engine.
+An advanced, GUI-driven automation tool for senior structural engineers. It connects directly to the **CSI ETABS COM API**, extracts targeted verification metrics across multiple modules, performs multi-model variance analysis, and generates formatted, code-compliant Microsoft Word reports using Jinja2 templating — fully testable on macOS via a high-fidelity Mock Data Engine.
 
 ---
 
-## 🌟 Overview & Objectives
+## 🌟 Overview & Engineering Value
 
-In structural engineering, compiling design reports is a tedious, repetitive, and error-prone task. Engineers often spend hours manually copy-pasting tables, forces, and design outcomes from ETABS into Microsoft Word documents. 
+Standard structural reporting involves massive data dumps and repetitive formatting. This software shifts the paradigm from simple "data extraction" to **automated structural verification**.
 
-**ETABS Report Generator** solves this by:
-1. **Automating Data Extraction**: Programmatically executing analysis and design in ETABS to extract exact frame forces and required reinforcement.
-2. **Dynamic Templating**: Merging the extracted data directly into existing, branded Word documents (`.docx`) utilizing high-performance placeholders and table-loops.
-3. **Providing a Modern Interface**: Wrapping the entire process in a clean, modern, dark-themed desktop application.
-4. **Cross-Platform Testability**: Enabling development and template testing on non-Windows/non-ETABS platforms (such as macOS) through intelligent mockup/dummy data fallbacks.
+| Capability | Detail |
+| :--- | :--- |
+| **Precision Extraction** | Pulls exact verification metrics (drifts, mass participation, D/C ratios) rather than raw forces |
+| **Multi-Model Comparison** | Analyzes two `.edb` files simultaneously; computes Δ variance for value engineering |
+| **Strict Unit Hygiene** | Forces the ETABS API into kN-m-°C before any extraction to guarantee calculation safety |
+| **Dynamic Word Templating** | `docxtpl` + Jinja2 generates isolated tables per Load Combination |
+| **Auto TOC Update** | Word COM API finalizes page numbers and Table of Contents after rendering |
+| **Cross-Platform Dev** | Mock Data Engine activates automatically on macOS/Linux — no ETABS required |
 
 ---
 
 ## 🛠️ Architecture & System Workflow
 
-The program is structured as a modular Python application. The interaction between components is illustrated below:
-
-```mermaid
-graph TD
-    A[app.py GUI] -->|1. Triggers Thread| B[etabs_extractor.py]
-    A -->|3. Passes Data| C[report_generator.py]
-    
-    B -->|2. COM API Connection| D[(CSI ETABS App)]
-    D -->|Extracts Forces & Rebar| B
-    B -->|Returns Pandas DataFrames| A
-    
-    E[create_template.py] -.->|Generates Tagged Docx| F[Report_Template_Tagged.docx]
-    F -->|4. Template Input| C
-    C -->|5. Renders & Saves| G[Output Report _Generated.docx]
-
-    style A fill:#1a1c23,stroke:#3b82f6,stroke-width:2px,color:#fff
-    style B fill:#1a1c23,stroke:#10b981,stroke-width:2px,color:#fff
-    style C fill:#1a1c23,stroke:#f59e0b,stroke-width:2px,color:#fff
-    style D fill:#111827,stroke:#6b7280,stroke-width:1px,color:#fff
-    style E fill:#111827,stroke:#ec4899,stroke-width:1px,color:#fff
-    style F fill:#111827,stroke:#6b7280,stroke-width:1px,color:#fff
-    style G fill:#111827,stroke:#10b981,stroke-width:2px,color:#fff
+```
+┌───────────────────────────────────────────────────────────────┐
+│                         app.py  (GUI)                         │
+│  CustomTkinter · Dark Slate theme · queue.Queue thread bridge │
+└────┬───────────────────────────────────────┬──────────────────┘
+     │ Background Thread                      │ Background Thread
+     ▼                                        ▼
+┌──────────────────┐                 ┌─────────────────────┐
+│ etabs_extractor  │  (Windows)      │   mock_extractor    │  (macOS/Linux)
+│ ETABSExtractor   │  ←─── OR ──→   │ MockEtabsExtractor  │
+│ COM API + psutil │                 │ Plausible stub data │
+└────────┬─────────┘                 └──────────┬──────────┘
+         │ pandas DataFrames                    │
+         └──────────────┬───────────────────────┘
+                        ▼
+              ┌──────────────────┐
+              │  data_pipeline   │
+              │  safe_model_merge│  outer join + Δ variance
+              │  group_by_combo  │  flat → combo-keyed dicts
+              │  build_report_context │
+              └────────┬─────────┘
+                       ▼
+            ┌────────────────────┐
+            │  report_generator  │
+            │  DocxTemplate.render()      │
+            │  update_word_toc() │  Word COM (Windows) / skip (macOS)
+            └────────┬───────────┘
+                     ▼
+         ┌─────────────────────────┐
+         │  *_Generated.docx       │
+         │  (TOC & page numbers    │
+         │   auto-refreshed)       │
+         └─────────────────────────┘
 ```
 
 ### Component Breakdown
 
-*   **`app.py`**: The control center. It implements a fully responsive CustomTkinter GUI. To keep the GUI responsive and prevent the "Not Responding" freeze during heavy data extraction, it runs the extraction process in a separate background thread (`threading.Thread`).
-*   **`etabs_extractor.py`**: Handles low-level COM API communication with ETABS. It connects to the running instance or starts a new one, opens the `.edb` model, runs the structural analysis, triggers the concrete design module, and extracts structural data into structured Pandas DataFrames.
-*   **`report_generator.py`**: The document constructor. It reads the tagged Microsoft Word template and renders the placeholder variables and data tables using `docxtpl` (which integrates `python-docx` and Jinja2).
-*   **`create_template.py`**: A helper script. It takes a master report document (e.g., `Review struktur Gedung RS Cokrodipo B. Lampung 2026.docx`) and programmatically appends Jinja-tagged placeholder variables and empty target tables with looping commands, outputting `Report_Template_Tagged.docx`.
+| File | Responsibility |
+| :--- | :--- |
+| **`app.py`** | Premium CustomTkinter GUI. Precision filter dropdowns auto-populated by pre-fetch. Module checklist, second EDB slot for comparison mode, thread-safe `queue.Queue` bridge. |
+| **`etabs_extractor.py`** | Live COM layer. OS detection, ghost-process sweep (`psutil`), kN-m-°C unit enforcement, `ETABSExtractor` class with prefetch + 3-module extraction methods. |
+| **`mock_extractor.py`** | Cross-platform dev stub. `MockEtabsExtractor` produces structurally plausible data matching the exact schema of the real extractor. |
+| **`data_pipeline.py`** | Pure-pandas processing. Outer-join model merge, variance calculation, topology-mismatch handling, combo grouping, full context assembly. |
+| **`report_generator.py`** | Document construction. `docxtpl` rendering + `update_word_toc()` via Word COM for automatic TOC refresh. |
+| **`create_template.py`** | Helper: appends Jinja-tagged tables to an existing master `.docx`. |
 
 ---
 
-## 💎 Features & Highlights
+## 🛑 Defensive Error-Handling Architecture (4 Layers)
 
-### 1. Modern Desktop Interface
-Built using `customtkinter`, the application provides a modern dark-themed user interface, featuring:
-*   Project metadata input fields (Project Name, Engineer Name).
-*   Interactive file explorers to easily select ETABS models (`.edb`) and Word templates (`.docx`).
-*   A responsive status tracker and progressive loading bar to give real-time feedback during connection, extraction, and generation phases.
-
-### 2. Intelligent Data Extraction Pipeline
-*   **Targeted Output Selection**: Deselects all load cases/combos by default and allows target selection to save massive memory and execution time.
-*   **Forces Extraction**: Uses `SapModel.Results.FrameForce` to extract Axial ($P$), Shear ($V_2, V_3$), Torsion ($T$), and Bending ($M_2, M_3$) forces at every design station.
-*   **Design Results Extraction**: Automatically triggers `SapModel.DesignConcrete.StartDesign()` and loops over frame objects to retrieve exact Top, Bottom, Shear, and Torsional reinforcement values using `GetSummaryResultsBeam`.
-
-### 3. High-Fidelity Word Templating (`docxtpl`)
-Instead of rewriting word files from scratch (which ruins headers, margins, and custom styles), the tool injects data directly into an existing document using standard Jinja syntax:
-*   **Single Placeholders**: `{{ project_name }}` and `{{ engineer_name }}`
-*   **Dynamic Word Tables**: Uses table row tags (`{% tr for item in forces_list %}` ... `{% endtr %}`) to dynamically expand and populate full tables while matching the exact fonts, borders, and alignments defined in the template.
-
-### 4. Resilient Fallbacks (Cross-Platform)
-ETABS and COM-based automation require Windows. To allow developers to work, design, and test UI/rendering updates on **macOS or Linux**, `app.py` catches library and system errors gracefully:
-*   If `comtypes` is not found, or a non-Windows OS is detected, the application automatically switches to **mock/dummy data generation**.
-*   This generates functional mock tables for beam forces and required rebar, allowing the `report_generator.py` workflow to be tested fully on any platform.
+| Layer | Where | What it prevents |
+| :--- | :--- | :--- |
+| **1. Pre-flight File Lock** | `check_word_file_lock()` in `etabs_extractor.py` | Fatal `PermissionError` when target `.docx` is open in Word |
+| **2. COM Process Sweep** | `check_and_clear_etabs()` with `psutil` | Frozen `GetActiveObject()` from orphaned `ETABS.exe` instances |
+| **3. Topology Mismatch** | `safe_model_merge()` in `data_pipeline.py` | `NaN` calculation errors from deleted/added elements between models |
+| **4. Thread-Safe Routing** | `queue.Queue` + `self.after()` in `app.py` | GUI freezes from widget updates called off the main thread |
 
 ---
 
-## 📝 Word Template Schema & Tagging
+## 🎯 Precision Extraction Filters (Pre-Fetch)
 
-If you are customizing the Word template manually, or using `create_template.py`, here is the schema of tags available in the template:
+On selecting an `.edb` file, a background thread prefetches model definitions and auto-populates four filter columns:
 
-| Tag Category | Variable Name | Data Type | Description |
+* **Target Stories** — e.g., `Story 1`, `Roof`
+* **Target Groups** — e.g., `Core_Walls`, `Typical_Floor_Beams`
+* **Target Sections** — e.g., `B-40x80`, `Wall-300`
+* **Target Load Combos** — e.g., `ENV-ALL`, `1.2D+1.0Ex+0.3Ey`
+
+Unchecked items are excluded from the extraction, reducing memory usage and API round-trips.
+
+---
+
+## 📋 Modular Extraction Checklist
+
+### Module 1: Global Stability & Dynamic Parameters
+*(Code compliance — e.g., SNI 1726)*
+- ☑ Modal Periods & Frequencies
+- ☑ Mass Participation Ratios (verifies > 90% in X/Y)
+- ☑ Story Drifts & Displacements
+- ☑ Base Reactions (Vx, Vy, Fz)
+
+### Module 2: Element-Level Design
+*(Member sizing, demand/capacity, reinforcement)*
+- ☑ Frame Internal Forces (P, V2, V3, T, M2, M3)
+- ☑ Required Rebar (longitudinal + transverse for beams)
+- ☑ Column P-M-M Interaction D/C Ratios (auto-flags > 1.0)
+
+### Module 3: Visual Documentation
+*(Image capture — live Windows/ETABS only)*
+- ☐ Model Geometry (3D extruded)
+- ☐ Deformed Shapes (Mode 1 & 2)
+- ☐ D/C Ratio Color Map (3D)
+
+---
+
+## 📝 Word Template Tag Schema
+
+### Single Placeholders
+| Tag | Type | Description |
+| :--- | :--- | :--- |
+| `{{ project_name }}` | String | Project name (cover page) |
+| `{{ engineer_name }}` | String | Analyzing engineer's name |
+| `{{ is_comparison_mode }}` | Boolean | True when two models are compared |
+| `{{ pmm_failures_count }}` | Integer | Number of columns with D/C > 1.0 |
+
+### Table Loop Variables
+| Variable | Loop Tag | Description |
+| :--- | :--- | :--- |
+| `modal_list` | `{% tr for item in modal_list %}` | Modal periods + mass participation |
+| `drifts_list` | `{% tr for item in drifts_list %}` | Flat story drift table |
+| `drifts_by_combo` | `{% for lc in drifts_by_combo %}` | Drifts grouped by Load Combo |
+| `base_reactions_list` | `{% tr for item in base_reactions_list %}` | Base shears and vertical reactions |
+| `combinations_list` | `{% for lc in combinations_list %}` | Forces grouped by Load Combo |
+| `combinations_comparison_list` | `{% for lc in combinations_comparison_list %}` | Merged Model A vs B with Δ |
+| `rebar_list` | `{% tr for item in rebar_list %}` | Required beam reinforcement |
+| `pmm_list` | `{% tr for item in pmm_list %}` | Column D/C ratios (all elements) |
+| `pmm_failures_list` | `{% tr for item in pmm_failures_list %}` | Only failing columns (D/C > 1.0) |
+
+### Multi-Model Comparison Template Example
+```jinja
+{% for lc in combinations_comparison_list %}
+**Load Combination:** {{ lc.combo_name }}
+
+| Frame | M3 (Existing) | M3 (Retrofit) | Variance (Δ) |
 | :--- | :--- | :--- | :--- |
-| **Header Info** | `{{ project_name }}` | String | Name of the construction project |
-| **Header Info** | `{{ engineer_name }}` | String | Name of the analyzing structural engineer |
-| **Beam Forces Table** | `forces_list` | List of Dicts | Table containing structural forces per station |
-| **Rebar Table** | `rebar_list` | List of Dicts | Table containing required concrete design reinforcement |
+{% tr for item in lc.forces_data %}{{ item.Frame }} | {{ item.M3_A }} | {{ item.M3_B }} | {{ item.Variance_M3 }}{% endtr %}
 
-### Table Columns Mapping
-
-For the dynamic table structures, use the following keys in your Jinja loops:
-
-#### Beam Forces Table (`forces_list`)
-```jinja
-{% tr for item in forces_list %}
-Frame:    {{ item.Frame }}      Station: {{ item.Station }}    LoadCase: {{ item.LoadCase }}
-P:        {{ item.P }}          V2:      {{ item.V2 }}         V3:       {{ item.V3 }}
-T:        {{ item.T }}          M2:      {{ item.M2 }}         M3:       {{ item.M3 }}
-{% endtr %}
+{% endfor %}
 ```
 
-#### Reinforcement Table (`rebar_list`)
-```jinja
-{% tr for item in rebar_list %}
-Frame:      {{ item.Frame }}      Station:  {{ item.Station }}
-Top Rebar:  {{ item.TopRebar }}   Bot Rebar: {{ item.BotRebar }}
-Shear Rebar:{{ item.ShearRebar }} Torsion:  {{ item.TorsionRebar }}
-{% endtr %}
-```
+> **Important**: The Table of Contents in `Report_Template_Tagged.docx` must be a **native Word automatic TOC** (References → Table of Contents → Automatic Table). The `update_word_toc()` function uses Word field codes to trigger the refresh — a plain-text list will not work.
 
 ---
 
 ## 🚀 Installation & Getting Started
 
 ### Prerequisites
-*   Python 3.8 or higher.
-*   (For live ETABS extraction) Microsoft Windows and CSI ETABS installed.
+- Python 3.8+
+- *(For live ETABS)* Microsoft Windows + CSI ETABS installed
 
-### Setup Instructions
+### Setup
 
-1.  **Clone / Open the Workspace**:
-    Make sure you are in the project folder:
-    ```bash
-    cd "ETABS Report Generator"
-    ```
-
-2.  **Activate Virtual Environment**:
-    *   **Windows**:
-        ```bash
-        venv\Scripts\activate
-        ```
-    *   **macOS / Linux**:
-        ```bash
-        source venv/bin/activate
-        ```
-
-3.  **Install Dependencies**:
-    ```bash
-    pip install customtkinter pandas comtypes docxtpl python-docx
-    ```
-
----
-
-## 📖 How to Run & Generate Reports
-
-### Step 1: Pre-tag Your Document (Optional)
-If you have a base report and want to add the dynamic tables automatically:
 ```bash
-python create_template.py
+# 1. Create and activate virtual environment
+python -m venv venv
+source venv/bin/activate          # macOS/Linux
+# venv\Scripts\activate           # Windows
+
+# 2. Install dependencies
+pip install customtkinter pandas docxtpl python-docx numpy
+
+# Windows-only (for live ETABS + TOC update):
+# pip install comtypes psutil pywin32
 ```
-This takes `Review struktur Gedung RS Cokrodipo B. Lampung 2026.docx` and generates `Report_Template_Tagged.docx` ready to use.
 
-### Step 2: Launch the GUI App
+### Running
+
 ```bash
+# Optional: pre-tag your existing master document
+python create_template.py
+
+# Launch the GUI
 python app.py
 ```
 
-### Step 3: Generate the Report
-1.  Enter your **Project Name** and **Engineer Name**.
-2.  Browse and select your ETABS Model file (`.edb`).
-3.  Browse and select your Tagged Word Template (`Report_Template_Tagged.docx`).
-4.  Click **Generate Report**.
-    *   *On Windows with ETABS*: The tool will launch ETABS, extract analytical results, format them, and output a new Word document.
-    *   *On macOS / Development*: The tool will alert you and generate a functional document using dummy data so you can check styling and layouts.
-5.  Find your completed document saved adjacent to your template, appended with `_Generated.docx`.
+**On macOS / without ETABS**: The app starts in ⚡ DEV MODE. Select any `.docx` template, click **Generate Report** — the Mock Data Engine activates automatically and produces a fully rendered output document.
+
+**On Windows with ETABS**: Select the `.edb` model (triggers prefetch → filter population), configure module checkboxes, optionally add a second Model B for comparison, then Generate.
+
+---
+
+## 🔄 Changelog
+
+### v2.0 — Current
+- **New**: `mock_extractor.py` — structurally plausible stub data for all 3 modules
+- **New**: `data_pipeline.py` — `safe_model_merge()`, `group_by_combo()`, `build_report_context()`
+- **Upgraded**: `etabs_extractor.py` — OS detection, 4-layer error handling, `ETABSExtractor` class with prefetch + full module coverage
+- **Upgraded**: `report_generator.py` — `update_word_toc()` via Word COM, new context-dict API
+- **Upgraded**: `app.py` — filter panel, module checklist, comparison mode, thread-safe queue bridge, premium Slate palette
+
+### v1.0 — Initial Release
+- Basic beam forces + rebar extraction
+- Simple dummy data fallback on macOS
+- Single-file template generation

@@ -31,3 +31,8 @@ Thumbs.db
 # Output Word Documents (except templates if they are part of the repo)
 # If you want to exclude generated documents:
 *_Generated.docx
+
+# Reference folders
+Reference
+
+
